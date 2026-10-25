@@ -6,6 +6,17 @@ from itertools import product
 from math import lcm
 from random import Random
 
+S = 10  # номер варианта
+
+
+def variant_text():
+    k = 5 - S % 3
+    M = 2 + S % 3
+    L = 3 + S % 5
+    d = 1 + S % 3
+    q = (2, 3, 5, 7)[S % 4]
+    return f"Вариант s = {S}: k = {k}, M = {M}, L = {L}, d = {d}, q = {q}, eps = 10^-{2 + S % 3}"
+
 
 class Source:
     def __init__(self, source_description):
@@ -265,6 +276,7 @@ def main():
     parser.add_argument("sequence", nargs="*", help="символы a1 ... ar для режима 2")
     parser.add_argument("--mode", type=int, choices=[1, 2], default=1)
     parser.add_argument("--seed", type=int)
+    parser.add_argument("--variant", action="version", version=variant_text())
     args = parser.parse_args()
 
     try:
