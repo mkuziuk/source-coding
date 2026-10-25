@@ -1,0 +1,143 @@
+import argparse
+import json
+import sys
+from fractions import Fraction
+from random import Random
+
+
+class Source:
+    def __init__(self, source_description):
+        if not isinstance(source_description, dict):
+            raise ValueError("Описание источника должно быть объектом JSON")
+
+        self.models = parse_section(source_description, "models")
+        self.switches = parse_section(source_description, "switches")
+        self.source = source_description.get("source")
+
+        for name, distribution in self.switches.items():
+            unknown_models = distribution.keys() - self.models.keys()
+            if unknown_models:
+                raise ValueError(f"switches.{name}: неизвестные модели {sorted(unknown_models)}")
+
+        if not isinstance(self.source, list) or not self.source:
+            raise ValueError("source должен быть непустым списком переключателей")
+        for name in self.source:
+            if not isinstance(name, str) or name not in self.switches:
+                raise ValueError(f"source: неизвестный переключатель {name}")
+
+        self.L = len(self.source)
+
+
+def parse_section(source_description, section_name):
+    section = source_description.get(section_name)
+    if not isinstance(section, dict) or not section:
+        raise ValueError(f"{section_name}: нужен непустой объект")
+
+    return {name: parse_distribution(f"{section_name}.{name}", distribution)
+            for name, distribution in section.items()}
+
+
+def parse_distribution(location, distribution):
+    if not isinstance(distribution, dict) or not distribution:
+        raise ValueError(f"{location}: нужно непустое распределение")
+    if not all(isinstance(p, str) for p in distribution.values()):
+        raise ValueError(f"{location}: вероятности должны быть строками")
+
+    try:
+        probabilities = {item: Fraction(p) for item, p in distribution.items()}
+    except (ValueError, ZeroDivisionError) as error:
+        raise ValueError(f"{location}: некорректная вероятность") from error
+
+    if any(p < 0 for p in probabilities.values()):
+        raise ValueError(f"{location}: отрицательная вероятность")
+    if sum(probabilities.values()) != 1:
+        raise ValueError(f"{location}: сумма вероятностей должна быть равна 1")
+
+    return probabilities
+
+
+def generate(source: Source, i, rng: Random):
+    switch = source.switches[source.source[i % source.L]]
+    model_name = rng.choices(list(switch), weights=list(switch.values()))[0]
+    model = source.models[model_name]
+
+    return rng.choices(list(model), weights=list(model.values()))[0]
+
+
+def mode_1(source, N, rng):
+    # при N <= 0 или None выдача бесконечная, остановка - Ctrl + C
+    infinite = N is None or N <= 0
+    i = 0
+    try:
+        while infinite or i < N:
+            print(generate(source, i, rng), end=" ")
+            i += 1
+    except KeyboardInterrupt:
+        pass
+    print()
+
+
+def symbol_probability(source, i, symbol):
+    switch = source.switches[source.source[i % source.L]]
+    return sum(p * source.models[model].get(symbol, 0) for model, p in switch.items())
+
+
+def sequence_probability(source, start, sequence):
+    result = Fraction(1)
+    for t, symbol in enumerate(sequence):
+        result *= symbol_probability(source, start + t, symbol)
+    return result
+
+
+def frequency(source, N, sequence, rng):
+    realization = [generate(source, i, rng) for i in range(N)]
+    r = len(sequence)
+    hits = sum(realization[i:i + r] == sequence for i in range(N - r + 1))
+    return Fraction(hits, N - r + 1)
+
+
+def mode_2(source, N, sequence, rng):
+    first = sequence_probability(source, 0, sequence)
+    average = sum(sequence_probability(source, j, sequence) for j in range(source.L)) / source.L
+
+    print(f"Точная вероятность с первого такта: {first} ~ {float(first):.6g}")
+    print(f"Среднее по позициям периода: {average} ~ {float(average):.6g}")
+    print(f"Частотная оценка при N = {N}: {float(frequency(source, N, sequence, rng)):.6g}")
+
+    print()
+    print("N", "оценка", "|- первый|", "|- среднее|")
+    for n in [10**2, 10**3, 10**4, 10**5, 10**6]:
+        if n < len(sequence):
+            continue
+        f = frequency(source, n, sequence, rng)
+        print(n, float(f), float(abs(f - first)), float(abs(f - average)))
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("source")
+    parser.add_argument("N")
+    parser.add_argument("sequence", nargs="*", help="символы a1 ... ar для режима 2")
+    parser.add_argument("--mode", type=int, choices=[1, 2], default=1)
+    parser.add_argument("--seed", type=int)
+    args = parser.parse_args()
+
+    try:
+        with open(args.source, encoding="utf-8") as file:
+            source = Source(json.load(file))
+        N = None if args.N == "None" else int(args.N)
+        if args.mode == 2 and not (args.sequence and N is not None and N >= len(args.sequence)):
+            raise ValueError("в режиме 2 нужны непустая последовательность и N не меньше её длины")
+    except (OSError, ValueError) as error:
+        print(f"Ошибка: {error}")
+        sys.exit(1)
+
+    rng = Random(args.seed)
+    if args.mode == 1:
+        mode_1(source, N, rng)
+    else:
+        mode_2(source, N, args.sequence, rng)
+
+
+if __name__ == "__main__":
+    main()
