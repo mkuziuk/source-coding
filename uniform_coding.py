@@ -2,7 +2,8 @@ import argparse
 import json
 import sys
 from fractions import Fraction
-from math import factorial, floor, lcm, log2
+from itertools import product
+from math import factorial, floor, lcm, log2, prod
 
 from source_extended import Source, variant_text
 
@@ -17,13 +18,47 @@ def entropy(probabilities):
     return H
 
 
+# Claude помог решить проблему распознаввния марковского источника
+def without_zeros(distribution):
+    return {s: p for s, p in distribution.items() if p != 0}
+
+
+def markov_distribution(source):
+    # без памяти и стационарный, только если initial = P x ... x P
+    # и во всех возможных контекстах следующий символ распределён по P
+    d = source.memory
+    positions = []
+    for j in range(d):
+        P = {}
+        for context, p in source.initial.items():
+            P[context[j]] = P.get(context[j], 0) + p
+        positions.append(without_zeros(P))
+    P = positions[0]
+    for j in range(1, d):
+        if positions[j] != P:
+            raise ValueError(f"источник не стационарный: в initial распределение символа "
+                             f"на позиции {j} другое, чем на позиции 0")
+    for context in product(source.alphabet, repeat=d):
+        if source.initial.get(context, 0) != prod(P.get(s, 0) for s in context):
+            raise ValueError("первые d символов зависимы: initial не равно P x ... x P")
+    # возможны только контексты из символов с P > 0
+    for context in product(sorted(P), repeat=d):
+        if without_zeros(source.models[source.transitions[context]]) != P:
+            raise ValueError(f"после контекста '{' '.join(context)}' следующий символ "
+                             f"распределён не так, как первый")
+    return P
+# end
+
+
 def memoryless_distribution(source):
     # распределение символа, если источник стационарный и без памяти, иначе ValueError
     if source.kind == "markov":
-        raise ValueError(f"у источника есть память (memory = {source.memory})")
+        return markov_distribution(source)
 
     if source.kind == "mixture":
-        distributions = [memoryless_distribution(c) for c in source.components.values()]
+        # достаточное условие: все компоненты с ненулевым весом без памяти и одинаковые
+        distributions = [memoryless_distribution(c) for name, c in source.components.items()
+                         if source.weights.get(name, 0) != 0]
         if any(d != distributions[0] for d in distributions):
             raise ValueError("смесь разных источников: такты зависимы, то есть есть память")
         return distributions[0]
